@@ -1,5 +1,6 @@
 //! Design tokens (light, PowerPoint-like; and dark) and fonts for the UI.
 
+use craft_ui::theme::Palette;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke, Visuals};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,7 @@ pub enum Brightness {
 }
 
 /// Every colour the chrome uses.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tokens {
     pub dark: bool,
     /// Window background (title bar, tab row, side panes).
@@ -122,6 +123,41 @@ impl Tokens {
             Brightness::Light => Self::light(),
             Brightness::Dark => Self::dark(),
         }
+    }
+    /// The saved brightness with the shared suite palette layered on when one is loaded.
+    pub fn effective(kind: Brightness, palette: Option<&Palette>) -> Self {
+        palette.map_or_else(|| Self::for_brightness(kind), |palette| Self::for_palette(kind, palette))
+    }
+    /// The palette's own light/dark family picks the built-in base, so a light palette never
+    /// keeps dark stock visuals (and the reverse). `_kind` is only the saved fallback family:
+    /// domain colours, metrics, radii and fonts stay from that built-in base.
+    pub fn for_palette(_kind: Brightness, palette: &Palette) -> Self {
+        let dark = palette.is_dark();
+        let mut t = Self::for_brightness(if dark { Brightness::Dark } else { Brightness::Light });
+        t.dark = dark;
+        t.chrome = palette.background();
+        t.card = palette.surface();
+        t.card_border = palette.outline();
+        t.text_field = palette.surface_alt();
+        t.text = palette.text();
+        t.text_dim = palette.text_muted();
+        t.text_faint = palette.outline();
+        t.border = palette.outline();
+        t.separator = palette.outline();
+        t.hover = palette.surface_alt();
+        t.pressed = palette.outline();
+        t.selected = palette.surface_alt();
+        t.accent = palette.accent();
+        t.accent_text = palette.contrast_text();
+        t.contextual = palette.accent();
+        t.selection = palette.accent();
+        let accent = palette.accent();
+        t.text_selection = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 90);
+        t.field_bg = palette.surface_alt();
+        t.control = palette.outline();
+        t.control_hover = palette.text_muted();
+        t.control_pressed = palette.text();
+        t
     }
     pub fn get(ctx: &egui::Context) -> Self {
         if ctx.global_style().visuals.dark_mode { Self::dark() } else { Self::light() }
@@ -480,6 +516,91 @@ mod tests {
         // so notes and the outline showed gaps where they were.
         for (c, size, ink) in drawn("\u{2013}\u{2014}-_\u{2026}\u{2022}\u{00b7}\u{2018}\u{2019}\u{201c}\u{201d}=~") {
             assert!(ink, "{c:?} ({:04X}) draws nothing at {size} px", c as u32);
+        }
+    }
+
+    fn luminance(color: Color32) -> f32 {
+        fn linear(channel: u8) -> f32 {
+            let value = f32::from(channel) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    }
+
+    fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+        let (lighter, darker) = if luminance(a) >= luminance(b) { (a, b) } else { (b, a) };
+        (luminance(lighter) + 0.05) / (luminance(darker) + 0.05)
+    }
+
+    #[test]
+    fn dark_palette_maps_core_chrome_and_leaves_domain_colours() {
+        let mut palette = Palette::dark();
+        palette.base[0] = Color32::from_rgb(0x10, 0x12, 0x16);
+        palette.base[1] = Color32::from_rgb(0x1A, 0x1E, 0x26);
+        palette.base[2] = Color32::from_rgb(0x24, 0x2A, 0x34);
+        palette.base[3] = Color32::from_rgb(0x3A, 0x42, 0x50);
+        palette.base[4] = Color32::from_rgb(0x8A, 0x94, 0xA6);
+        palette.base[5] = Color32::from_rgb(0xE6, 0xEA, 0xF2);
+        palette.accent = Some(Color32::from_rgb(0x4C, 0x8D, 0xFF));
+        let t = Tokens::for_palette(Brightness::Light, &palette);
+        assert!(t.dark);
+        assert_eq!(t.chrome, palette.background());
+        assert_eq!(t.card, palette.surface());
+        assert_eq!(t.text_field, palette.surface_alt());
+        assert_eq!((t.text, t.text_dim), (palette.text(), palette.text_muted()));
+        assert_eq!(t.border, palette.outline());
+        assert_eq!(t.accent, palette.accent());
+        assert_eq!(t.selection, palette.accent());
+        assert_eq!(t.accent_text, palette.contrast_text());
+        assert_eq!(t.canvas, Tokens::dark().canvas, "the document canvas keeps its built-in family colour");
+    }
+
+    #[test]
+    fn light_palette_maps_core_chrome() {
+        let mut palette = Palette::light();
+        palette.name = "test-light".into();
+        palette.base[0] = Color32::from_rgb(0xFA, 0xFA, 0xF7);
+        palette.base[1] = Color32::from_rgb(0xEE, 0xEE, 0xE9);
+        palette.base[2] = Color32::from_rgb(0xE2, 0xE2, 0xDC);
+        palette.base[3] = Color32::from_rgb(0xB4, 0xB4, 0xAC);
+        palette.base[4] = Color32::from_rgb(0x6C, 0x6C, 0x66);
+        palette.base[5] = Color32::from_rgb(0x1C, 0x1C, 0x1A);
+        palette.accent = Some(Color32::from_rgb(0xB4, 0x54, 0x10));
+        let t = Tokens::for_palette(Brightness::Dark, &palette);
+        assert!(!t.dark);
+        assert_eq!(t.chrome, palette.background());
+        assert_eq!(t.card, palette.surface());
+        assert_eq!(t.text, palette.text());
+        assert_eq!(t.text_dim, palette.text_muted());
+        assert_eq!(t.border, palette.outline());
+        assert_eq!(t.accent, palette.accent());
+        assert_eq!(t.accent_text, palette.contrast_text());
+        assert_eq!(t.canvas, Tokens::light().canvas);
+    }
+
+    #[test]
+    fn palette_family_overrides_saved_brightness() {
+        let dark_from_light_save = Tokens::for_palette(Brightness::Light, &Palette::dark());
+        assert!(dark_from_light_save.dark);
+        assert_eq!(dark_from_light_save.canvas, Tokens::dark().canvas);
+        let light_from_dark_save = Tokens::for_palette(Brightness::Dark, &Palette::light());
+        assert!(!light_from_dark_save.dark);
+        assert_eq!(light_from_dark_save.canvas, Tokens::light().canvas);
+    }
+
+    #[test]
+    fn no_palette_keeps_the_saved_built_in_theme() {
+        assert_eq!(Tokens::effective(Brightness::Light, None), Tokens::light());
+        assert_eq!(Tokens::effective(Brightness::Dark, None), Tokens::dark());
+    }
+
+    #[test]
+    fn accent_text_stays_readable_on_every_accent() {
+        for accent in [Color32::from_rgb(0x01, 0x65, 0xDD), Color32::from_rgb(0xE2, 0xC4, 0x4A), Color32::from_rgb(0x58, 0xB0, 0x5C)] {
+            let mut palette = Palette::light();
+            palette.accent = Some(accent);
+            let t = Tokens::for_palette(Brightness::Light, &palette);
+            assert!(contrast_ratio(t.accent_text, t.accent) >= 4.5, "accent {accent:?} with text {:?}", t.accent_text);
         }
     }
 }

@@ -33,9 +33,28 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     }
 }
 
+/// `prefs.json` with the read-only `settings.override.json` overlaid on it.
+///
+/// The overlay is written by a package manager (the NixOS and home-manager modules) or by hand, so
+/// its values win over the saved file; they are never written back. Only the preferences are
+/// overlaid: `ui.json` holds window and docking state, which an overlay must not freeze.
+fn read_prefs(dir: &Path) -> Option<Prefs> {
+    let mut base: serde_json::Value = read(&dir.join(PREFS_FILE))?;
+    if let Some(overlay) = craft_settings::overlay::load_overlay(dir) {
+        craft_settings::overlay::merge(&mut base, overlay);
+    }
+    match serde_json::from_value(base) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            log::warn!("{}: {e}; using the defaults", dir.join(PREFS_FILE).display());
+            None
+        }
+    }
+}
+
 /// The saved UI state and preferences in `dir` (each `None` when missing or unusable).
 pub fn load(dir: &Path) -> (Option<UiState>, Option<Prefs>) {
-    (read::<UiState>(&dir.join(UI_FILE)).map(UiState::sanitized), read::<Prefs>(&dir.join(PREFS_FILE)).map(Prefs::sanitized))
+    (read::<UiState>(&dir.join(UI_FILE)).map(UiState::sanitized), read_prefs(dir).map(Prefs::sanitized))
 }
 
 /// Write `bytes` to `path` through a temporary file beside it.
@@ -139,6 +158,24 @@ mod tests {
         // A settings folder that is a file: nothing saved, no panic.
         std::fs::write(d.join("blocked"), "file").unwrap();
         save(&d.join("blocked"), &ui, &prefs);
+    }
+
+    /// The overlay from the package manager wins over `prefs.json`; `ui.json` is never overlaid.
+    #[test]
+    fn the_settings_overlay_wins_over_the_saved_preferences() {
+        let d = dir("overlay");
+        std::fs::write(d.join(PREFS_FILE), r#"{"author": "Saved", "gridSpacing": 11.0}"#).unwrap();
+        std::fs::write(d.join(craft_settings::overlay::OVERLAY_FILE), r#"{"author": "Declared", "undoLimit": 7}"#).unwrap();
+        let prefs = load(&d).1.unwrap();
+        assert_eq!(prefs.author, "Declared");
+        assert_eq!(prefs.grid_spacing, 11.0);
+        assert_eq!(prefs.undo_limit, 7);
+        std::fs::write(d.join(UI_FILE), r#"{"zoom": 1.5}"#).unwrap();
+        std::fs::write(d.join(craft_settings::overlay::OVERLAY_FILE), r#"{"zoom": 9.0}"#).unwrap();
+        assert_eq!(load(&d).0.unwrap().zoom, Some(1.5));
+        // A damaged overlay is ignored; the saved preferences still load.
+        std::fs::write(d.join(craft_settings::overlay::OVERLAY_FILE), b"{").unwrap();
+        assert_eq!(load(&d).1.unwrap().author, "Saved");
     }
 
     /// The window opens with the worst `ui.json` values once they are sanitized; a zoom of

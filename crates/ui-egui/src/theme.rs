@@ -12,6 +12,9 @@ pub enum Brightness {
     Dark,
 }
 
+/// egui memory key holding the tokens `apply` installed.
+const APPLIED_TOKENS: &str = "deckcraft.applied-tokens";
+
 /// Every colour the chrome uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tokens {
@@ -159,13 +162,17 @@ impl Tokens {
         t.control_pressed = palette.text();
         t
     }
+    /// The tokens last applied to `ctx`, so every `Tokens::get` caller paints with the suite
+    /// palette instead of rebuilding the stock tokens from `visuals.dark_mode`.
     pub fn get(ctx: &egui::Context) -> Self {
-        if ctx.global_style().visuals.dark_mode { Self::dark() } else { Self::light() }
+        ctx.data(|data| data.get_temp::<Tokens>(egui::Id::unique(APPLIED_TOKENS)))
+            .unwrap_or_else(|| if ctx.global_style().visuals.dark_mode { Self::dark() } else { Self::light() })
     }
 }
 
 /// Apply tokens to egui's style.
 pub fn apply(ctx: &egui::Context, t: &Tokens) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(APPLIED_TOKENS), *t));
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
     v.window_fill = t.card;
@@ -592,6 +599,16 @@ mod tests {
     fn no_palette_keeps_the_saved_built_in_theme() {
         assert_eq!(Tokens::effective(Brightness::Light, None), Tokens::light());
         assert_eq!(Tokens::effective(Brightness::Dark, None), Tokens::dark());
+    }
+
+    #[test]
+    fn get_returns_the_tokens_apply_installed() {
+        let ctx = egui::Context::default();
+        let mut palette = Palette::dark();
+        palette.base[0] = Color32::from_rgb(0x10, 0x12, 0x16);
+        let applied = Tokens::for_palette(Brightness::Light, &palette);
+        apply(&ctx, &applied);
+        assert_eq!(Tokens::get(&ctx), applied);
     }
 
     #[test]

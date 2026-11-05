@@ -90,6 +90,18 @@ impl SlideApp {
             styled: false,
             restyle: true,
             fonts_ready: false,
+            suite_palette: {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    craft_ui::theme::Palette::load().map(|loaded| loaded.palette)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    None
+                }
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            palette_watcher: craft_ui::theme::PaletteWatcher::from_env(),
             last_time: 0.0,
             last_recovery: 0.0,
             quit_confirmed: false,

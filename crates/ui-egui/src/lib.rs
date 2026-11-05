@@ -304,6 +304,11 @@ pub struct SlideApp {
     styled: bool,
     restyle: bool,
     fonts_ready: bool,
+    /// The shared suite palette loaded at start-up; `None` on the web and when no file exists.
+    pub(crate) suite_palette: Option<craft_ui::theme::Palette>,
+    /// Polls the palette file for changes. Native only: the web keeps its built-in theme.
+    #[cfg(not(target_arch = "wasm32"))]
+    palette_watcher: craft_ui::theme::PaletteWatcher,
     last_time: f64,
     /// When AutoRecover data was last written (monotonic seconds, not wall time).
     pub last_recovery: f64,

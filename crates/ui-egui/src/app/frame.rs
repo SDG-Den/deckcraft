@@ -17,12 +17,27 @@ impl SlideApp {
             ctx.request_discard("install interface fonts before layout");
             return false;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_suite_palette(ctx);
         if self.restyle {
-            theme::apply(ctx, &theme::Tokens::for_brightness(self.ui.brightness));
+            theme::apply(ctx, &theme::Tokens::effective(self.ui.brightness, self.suite_palette.as_ref()));
             self.restyle = false;
         }
         self.fonts_ready = true;
         true
+    }
+
+    /// Reapply tokens when the suite palette file changes. A hidden window must not wake every
+    /// 400 ms, so poll only while the viewport is drawn.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_suite_palette(&mut self, ctx: &egui::Context) {
+        if !palette_poll_visible(ctx) {
+            return;
+        }
+        if let Some(loaded) = self.palette_watcher.poll(ctx) {
+            self.suite_palette = Some(loaded.palette);
+            self.restyle = true;
+        }
     }
 
     /// AutoRecover on a monotonic deadline, even when nothing is painted.
@@ -104,5 +119,33 @@ impl SlideApp {
         if playing {
             ctx.request_repaint_after(std::time::Duration::from_millis(15));
         }
+    }
+}
+
+/// Whether the palette watcher may poll this frame. An unknown visibility keeps the old behaviour.
+#[cfg(not(target_arch = "wasm32"))]
+fn palette_poll_visible(ctx: &egui::Context) -> bool {
+    ctx.input(|input| input.viewport().visible().unwrap_or(true))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn theme_palette_polling_requires_a_visible_viewport() {
+        let ctx = egui::Context::default();
+        let poll_visible = |minimized: bool, occluded: bool| {
+            let mut info = egui::ViewportInfo::default();
+            info.minimized = Some(minimized);
+            info.occluded = Some(occluded);
+            let input = egui::RawInput { viewports: std::iter::once((egui::ViewportId::ROOT, info)).collect(), ..Default::default() };
+            let mut seen = false;
+            let mut output = ctx.run_ui(input, |_| seen = super::palette_poll_visible(&ctx));
+            output.textures_delta.clear();
+            seen
+        };
+        assert!(poll_visible(false, false), "a normal window polls");
+        assert!(!poll_visible(true, false), "a minimized window must not poll");
+        assert!(!poll_visible(false, true), "an occluded window must not poll");
     }
 }
